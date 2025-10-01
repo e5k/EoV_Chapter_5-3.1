@@ -1,6 +1,10 @@
 ## Supplementary material to chapter 5-3.1 of the Encyclopaedia of Volcanoes (3rd Version)
 
-This repository contains the supplementary material to the **Exposure to volcanic hazards** chapter of the 3rd edition of the Encyclopaedia of Volcanoes by S. Biass , A. Weir, C. Michellier, V. Miller, M. Joffrain, M.L. Bautista, J. Daniell, A. Gunadi Brata B. Mafuko Nyandwi and M. Kervyn. The repository contains two main Python scripts:
+This repository contains the supplementary material to the **Exposure to volcanic hazards** chapter of the 3rd edition of the Encyclopaedia of Volcanoes.
+
+> S. Biass , A. Weir, C. Michellier, V. Miller, M. Joffrain, M.L. Bautista, J. Daniell, A. Gunadi Brata B. Mafuko Nyandwi and M. Kervyn, **Exposure to volcanic hazards**
+
+The repository contains two main Python scripts:
 
 - `prepare_hazard_buffer.py`: Creating radial buffers of various radii around the Holocene volcanoes and dissolving them at the country level;
 - `process_pop-GDP_GEE.py`: Using Google Earth Engine to perform zonal statistics on gridded population and GDP data.
