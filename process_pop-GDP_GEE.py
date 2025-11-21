@@ -1,13 +1,15 @@
 #%%
-import geemap
 import ee
-ee.Initialize()
-import pandas as pd 
+import geemap
+
+ee.Initialize() # <-- Add your project name if needed
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import seaborn as sns
+from shapely.geometry import MultiPolygon, Polygon
+
 sns.set_context('talk')
-import matplotlib.pyplot as plt
 
 
 #%% Read gpd and export them to shapefiles for ingestion in GEE
@@ -116,7 +118,7 @@ def getStats(df, name, rungdp=True, runghs=True, country=False, rad=rad, gdpT=gd
                 t_sum = ee.batch.Export.table.toDrive(collection=df_sum,description=f'ghs_{name}_{r}_{y}_sum',folder='exposure', selectors=col, fileFormat='csv')
                 t_sum.start()
         
-#%% Start the export process
+#%% Start the export process from GEE
 # Get gpd
 getStats(gdf_countryS, 'countryS', runghs=False)
 getStats(gdf_countryA, 'countryA', runghs=False)
@@ -126,3 +128,90 @@ getStats(gdf_country, 'country', runghs=False, country=True, rad=[5])
 getStats(gdf_countryA, 'countryA', rungdp=False)
 getStats(gdf_countryS, 'countryS', rungdp=False)
 getStats(gdf_country, 'country', rungdp=False, country=True, rad=[5])
+
+#%% Once the GEE exports are done, read the CSVs and process them into final pop/gdp files
+# This assumes that all files have been downloaded from GEE into the 'Exposure' folder
+# Read back GHS output
+def prepareDF(pth):
+    df = pd.read_csv(pth)
+    # df = df.drop(['system:index', '.geo'], axis=1)
+    df = df.rename({'sum': 'Population'}, axis=1)
+    df['Population'] = df['Population'].astype(int)
+    return df
+
+def readDF(name, ds, country=False):
+    df = pd.DataFrame()
+    
+    if country:
+        rad = [10]
+    else:
+        rad = [10,30,100,300]
+
+        
+    if ds == 'ghs':
+        vecT = ghsT
+    else:
+        vecT = gdpT
+    
+    for r in rad:
+        for y in vecT:
+            print(f'Radius: {r} km; Year: {y}')
+            pth = f'Exposure/{ds}_{name}_{r}_{y}_sum.csv'
+
+            tmp_sum = prepareDF(pth)
+            tmp_sum['Year'] = y
+            
+            if country:
+                tmp_sum = tmp_sum.set_index(['Continent', 'Country', 'CountryID', 'Region', 'Subregion','Year'])
+            else:
+                tmp_sum = tmp_sum.set_index(['Continent', 'Country', 'CountryID', 'Radius', 'Region', 'Subregion','Year'])
+                
+            df = pd.concat([df, tmp_sum.reset_index()])
+
+    return df.set_index('Country')
+
+ghs_countryA = readDF('countryA', 'ghs')
+ghs_countryS = readDF('countryS', 'ghs')
+ghs_country = readDF('country', 'ghs', country=True)
+
+gdp_countryA = readDF('countryA', 'gdp')
+gdp_countryS = readDF('countryS', 'gdp')
+gdp_country = readDF('country', 'gdp', country=True)
+
+# Join all datasets
+
+def joinAll(dfA, dfS, dfTot,name):
+
+    idx = ['Country', 'Year', 'Radius']
+    col = 'Population'
+    dfA = dfA.reset_index().set_index(idx).rename({col: f'{name}A'}, axis=1)
+    dfS = dfS.reset_index().set_index(idx).rename({col: f'{name}S'}, axis=1)
+    dfTot = dfTot.reset_index().set_index(['Country', 'Year']).rename({col: f'{name}Tot'}, axis=1)
+
+    # Join
+    df = dfA.join(dfS[[f'{name}S']])
+    df = df.join(dfTot[[f'{name}Tot']])
+    
+    # Round
+    df[f'{name}A'] = df[f'{name}A'].round(0)
+    df[f'{name}S'] = df[f'{name}S'].round(0)
+    df[f'{name}Tot'] = df[f'{name}Tot'].round(0)
+    
+    # Compute the proportion
+    df[f'{name}An'] = df[f'{name}A']/df[f'{name}Tot']*100
+    df[f'{name}Sn'] = df[f'{name}S']/df[f'{name}Tot']*100
+    
+    # Round
+    df[f'{name}An'] = df[f'{name}An'].round(2)
+    df[f'{name}Sn'] = df[f'{name}Sn'].round(2)
+    
+    return df
+
+pop = joinAll(ghs_countryA, ghs_countryS, ghs_country, 'pop')
+gdp = joinAll(gdp_countryA, gdp_countryS, gdp_country, 'gdp')
+
+
+# Save final files
+pop.to_csv('Output/pop.csv')
+gdp.to_csv('Output/gdp.csv')
+

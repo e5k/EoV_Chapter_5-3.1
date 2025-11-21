@@ -1,28 +1,34 @@
 #%%
-import pandas as pd 
-import geopandas as gpd
-import numpy as np
-import utm 
-from pyproj import CRS
+import json
 
-# import os 
-# os.chdir('/Users/seb/Documents/WORK/Projects/Exposure/EoV-Chapter')
-from antimeridian_splitter.split_polygon import split_polygon
+import geopandas as gpd
+import pandas as pd
+import shapely.geometry
+import utm
+from getGVP import fetch_GVP
+from pyproj import CRS
+from shapely.geometry.multipolygon import MultiPolygon
+
 from antimeridian_splitter.geopolygon_utils import OutputFormat
+from antimeridian_splitter.split_polygon import split_polygon
 
 #%% Read and merge GVP and significant eruptions
-volcPth = 'Data/GVP_Volcanoes.xlsx'
-significantPth = 'Data/significant.tsv'
+
+working_pth = '.'
+
 # Read GVP
-volc = pd.read_excel(volcPth)
+volc, ver, dt = fetch_GVP('volcanoes', return_version=True)
+volc.to_excel(f"{working_pth}/Data/GVP_Holocene_Volcanoes_{ver.replace('. ', '').replace('.','-')}.xlsx", index=False)
 # Read significant eruptions
+significantPth = f'{working_pth}/Data/significant.tsv'
 significant = pd.read_csv(significantPth, delimiter='\t')
 
 # Filter volcanoes between 80S and 84N
 volc = volc[(volc.Latitude>=-80) & (volc.Latitude<=84)]
 # keep only relevant columns
-volc = volc[['Volcano Number', 'Volcano Name', 'Country', 'Region', 'Subregion', 'Latitude', 'Longitude', 'Elevation (m)']]
-
+volc = volc[['Volcano_Number', 'Volcano_Name', 'Country', 'Region', 'Subregion', 'Latitude', 'Longitude', 'Elevation']]
+# volc = volc[['Volcano Number', 'Volcano Name', 'Country', 'Region', 'Subregion', 'Latitude', 'Longitude', 'Elevation (m)']]
+volc = volc.rename({'Volcano_Number': 'Volcano Number', 'Volcano_Name': 'Volcano Name'}, axis=1)
 # Add column to store if a given volcano has had a significant eruption
 volc['Significant'] = volc['Volcano Name'].isin(significant.Name.unique())
 volc = volc[volc.Region != 'Antarctica']
@@ -41,9 +47,13 @@ gdf = gpd.GeoDataFrame(
 gdf = gdf.set_index('Volcano Number')
 
 
-#%% ## Prepare the volcano db
+#%% Create the radius footprints
+
 # Add radius 
 rad = [10,30,100,300]
+
+# Define buffers in UTM
+print('Buffering with Method 1')
 gdf_radius = gpd.GeoDataFrame()
 for v in gdf.index:
     tmp = gdf.loc[[v]]
@@ -58,53 +68,58 @@ for v in gdf.index:
 #%% Correct polygons that cross the antimeridian --> https://github.com/guidorice/antimeridian_splitter
 def splitPoly(poly):
     return MultiPolygon(split_polygon(poly, OutputFormat.GeometryCollection))
+def antemeridian_splitter(gdf_tmp):
+    # Set multi-index to ensure unique values
+    gdf_tmp = gdf_tmp.reset_index().set_index(['Volcano Number', 'Radius'])
+    # List to store polygons that cross the antimeridian
+    rows_toDrop = []
+    # Empty gdf to store split polygons
+    gdf_tmp_split = gpd.GeoDataFrame()
 
-# Set multi-index to ensure unique values
-gdf_radius = gdf_radius.reset_index().set_index(['Volcano Number', 'Radius'])
-# List to store polygons that cross the antimeridian
-rows_toDrop = []
-# Empty gdf to store split polygons
-gdf_radius_split = gpd.GeoDataFrame()
+    # Loop through all polygons
+    for row in range(0,gdf_tmp.shape[0]):
+        print(f'{row+1}/{gdf_tmp.shape[0]}')
+        # Isolate the current rows
+        tmpRow = gdf_tmp.iloc[row]
+        # Get indices
+        idx = gdf_tmp.iloc[[row]].index.get_level_values(0).values[0]
+        radius = gdf_tmp.iloc[[row]].index.get_level_values(1).values[0]
 
-# Loop through all polygons
-for row in range(0,gdf_radius.shape[0]):
-    print(f'{row+1}/{gdf_radius.shape[0]}')
-    # Isolate the current rows
-    tmpRow = gdf_radius.iloc[row]
-    # Get indices
-    idx = gdf_radius.iloc[[row]].index.get_level_values(0).values[0]
-    radius = gdf_radius.iloc[[row]].index.get_level_values(1).values[0]
+        # Convert gdf polygon to json
+        poly = json.loads(json.dumps(shapely.geometry.mapping(tmpRow.geometry)))
+        # Split the polygon
+        polySplit = splitPoly(poly)
+        # Convert back to gpd
+        polySplit = gpd.GeoDataFrame(index=[0], crs='epsg:4326', geometry=[polySplit])
 
-    # Convert gdf polygon to json
-    poly = json.loads(json.dumps(shapely.geometry.mapping(tmpRow.geometry)))
-    # Split the polygon
-    polySplit = splitPoly(poly)
-    # Convert back to gpd
-    polySplit = gpd.GeoDataFrame(index=[0], crs='epsg:4326', geometry=[polySplit])
+        # If the polygon is split in 2
+        if len(polySplit.explode(index_parts=True)) == 2:
+            # Save the index of the row
+            rows_toDrop.append(gdf_tmp.iloc[[row]].index.values[0])
+            # Append the new split polygon
+            df_tmp = gpd.GeoDataFrame({'geometry': polySplit.geometry, 'Volcano Number': idx, 'Radius': radius}, index=[0]).set_index(['Volcano Number', 'Radius'])
+            gdf_tmp_split = pd.concat([gdf_tmp_split,df_tmp])
 
-    # If the polygon is split in 2
-    if len(polySplit.explode(index_parts=True)) == 2:
-        # Save the index of the row
-        rows_toDrop.append(gdf_radius.iloc[[row]].index.values[0])
-        # Append the new split polygon
-        df_tmp = gpd.GeoDataFrame({'geometry': polySplit.geometry, 'Volcano Number': idx, 'Radius': radius}, index=[0]).set_index(['Volcano Number', 'Radius'])
-        gdf_radius_split = pd.concat([gdf_radius_split,df_tmp])
+    # Replace each row containing a polygon crossing the antimeridian by its split counterpart
+    gdf_tmp.loc[gdf_tmp_split.index.tolist(), 'geometry'] = gdf_tmp_split['geometry'].reset_index()
+    # Rename
+    gdf_tmp = gdf_tmp.rename({
+        'Elevation (m)': 'Elevation',
+        'Volcano Number': 'vID',
+        'Volcano Name': 'vName',
+        'Country': 'vCountry',
+        'Region': 'vRegion',
+        'Subregion': 'vSubregion'}, axis=1)
+    # Reset the index
+    return gdf_tmp.reset_index().set_index('vName')
 
-#%% Replace each row containing a polygon crossing the antimeridian by its split counterpart
-gdf_radius.loc[gdf_radius_split.index.tolist(), 'geometry'] = gdf_radius_split['geometry'].reset_index()
-# Rename
-gdf_radius = gdf_radius.rename({
-    'Elevation (m)': 'Elevation',
-    'Volcano Number': 'vID',
-    'Volcano Name': 'vName',
-    'Country': 'vCountry',
-    'Region': 'vRegion',
-    'Subregion': 'vSubregion'}, axis=1)
-# Reset the index
-gdf_radius = gdf_radius.reset_index().set_index('vName')
+#%%
+gdf_radius = antemeridian_splitter(gdf_radius)
 
-#%% Read Natural Earth countries
-countries = gpd.read_file('Data/ne_50m_admin_0_countries/ne_50m_admin_0_countries.shp')
+
+#%% Split by countries
+# Read Natural Earth countries
+countries = gpd.read_file('/Users/seb/Documents/WORK/Data/GIS/Vector/NaturalEarth/ne_50m_admin_0_countries/ne_50m_admin_0_countries.shp')
 countries = countries[['NAME_LONG', 'WOE_ID', 'CONTINENT', 'REGION_UN', 'SUBREGION', 'geometry']]
 # Adapt some column names
 countries = countries.rename({'NAME_LONG': 'Country', 'WOE_ID': 'CountryID', 'CONTINENT': 'Continent', 'REGION_UN': 'Region', 'SUBREGION': 'Subregion'}, axis=1)
@@ -166,9 +181,10 @@ for r in rad:
     
 
 #%% Save all
-gdf_radius.to_file("Output/radius_footprint.gpkg", layer='radius', driver="GPKG")
-gdf_country_A.to_file("Output/radius_footprint.gpkg", layer='countryA', driver="GPKG")
-gdf_country_S.to_file("Output/radius_footprint.gpkg", layer='countryS', driver="GPKG")
-gdf_country_A_diff.to_file("Output/radius_footprint.gpkg", layer='countryA_diff', driver="GPKG")
-gdf_country_S_diff.to_file("Output/radius_footprint.gpkg", layer='countryS_diff', driver="GPKG")
-countries.to_file("Output/radius_footprint.gpkg", layer='country', driver="GPKG")
+gdf_radius.to_file(f"{working_pth}/Output/radius_footprint.gpkg", layer='radius', driver="GPKG")
+gdf_country_A.to_file(f"{working_pth}/Output/radius_footprint.gpkg", layer='countryA', driver="GPKG")
+gdf_country_S.to_file(f"{working_pth}/Output/radius_footprint.gpkg", layer='countryS', driver="GPKG")
+gdf_country_A_diff.to_file(f"{working_pth}/Output/radius_footprint.gpkg", layer='countryA_diff', driver="GPKG")
+gdf_country_S_diff.to_file(f"{working_pth}/Output/radius_footprint.gpkg", layer='countryS_diff', driver="GPKG")
+countries.to_file(f"{working_pth}/Output/radius_footprint.gpkg", layer='country', driver="GPKG")
+
