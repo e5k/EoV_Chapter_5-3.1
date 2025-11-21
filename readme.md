@@ -19,6 +19,6 @@ In addition, the `Output/pop.csv` and `Output/GDP.csv` files contain the result 
 - `varAn`, `varSn`: Country exposure normalised to the total country value.
 
 > [!WARNING]  
-> Significant variations in exposure estimates can be introduced associated with the variability of volcanoes identified as active during the Holocene across versions of the Volcanoes of the World database. For instance, v. 5.2.7 (Feb 2025) contains 1264 volcanoes, whereas `v. 5.3.2` (Sep 2025) contains 1230 volcanoes. 
+> Significant variations in exposure estimates can be introduced associated with the variability of volcanoes identified as active during the Holocene across versions of the Volcanoes of the World database. For instance, `v. 5.2.7` (Feb 2025) contains 1264 volcanoes, whereas `v. 5.3.2` (Sep 2025) contains 1230 volcanoes. 
 
 ![Global GDP and population exposure to 100 km of an active volcano](Data/map.png)
